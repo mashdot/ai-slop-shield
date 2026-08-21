@@ -1,4 +1,4 @@
-# No Slop for YouTube (yt-ai-blocker)
+# AI Slop Shield
 
 A tiny Firefox extension that hides videos YouTube itself labels as **altered or synthetic content** ("Made with AI") from your feeds, search results, and recommendations — and blocks direct visits to labeled watch pages.
 
