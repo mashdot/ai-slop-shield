@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "AI Slop Shield",
+  "version": "1.0.0",
+  "description": "Hides videos YouTube labels as altered, synthetic, or AI-generated from feeds, search results, and recommendations.",
+  "content_scripts": [
+    {
+      "matches": ["*://www.youtube.com/*", "*://m.youtube.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "yt-ai-blocker@grace",
+      "strict_min_version": "115.0"
+    }
+  }
+}
