@@ -13,6 +13,8 @@ YouTube labels creator-disclosed and auto-detected AI content, but the label is 
 
 - **Hides AI-labeled video cards** on the home feed, search results, the watch-page sidebar, and grids
 - **Blocks watch pages** of labeled videos: playback is paused and an overlay offers *Watch anyway* or *Go back*
+- **Manual channel blocklist**: on any watch page, open the floating panel and click **Block this channel** — all videos from that channel are hidden everywhere (catches unlabeled AI channels the disclosure system misses). Unblock from the same panel at any time
+- **Blocked list**: every blocked video is logged (title, URL, time, reason) to localStorage, viewable in the floating panel
 - **Watch-page fallback**: when the disclosure only exists in the page's embedded JSON (common), the extension fetches the page HTML and checks for it
 - **Blocked list**: every blocked video is logged (title, URL, time) to localStorage. A floating button in the corner of YouTube shows the count and opens a panel where you can view, copy, or clear the list
 - 100% client-side, no external requests (beyond youtube.com itself), no data collection
@@ -27,14 +29,14 @@ YouTube labels creator-disclosed and auto-detected AI content, but the label is 
 
 | Surface | Method |
 |---|---|
-| Feed / search / sidebar cards | Scans for the visible "AI" badge (`.ytBadgeShapeText`) or "Altered or synthetic / Made with AI" text |
-| Watch page | Checks for the `how-this-was-made` disclosure panel or "AI" title badge in the DOM; falls back to fetching the page HTML and matching the embedded `howThisWasMadeSectionViewModel` disclosure |
+| Feed / search / sidebar cards | Scans for the visible "AI" badge (`.ytBadgeShapeText`) or "Altered or synthetic / Made with AI" text; also hides cards from channels on your manual blocklist |
+| Watch page | Checks for the `how-this-was-made` disclosure panel or "AI" title badge in the DOM; falls back to fetching the page HTML and matching the embedded `howThisWasMadeSectionViewModel` disclosure. Blocked channels get the same treatment |
 
 A `MutationObserver` re-scans as YouTube loads content dynamically, so infinite scroll and SPA navigation are covered.
 
 ## Limitations
 
-- Detection relies on YouTube's labeling. Videos a creator fails to disclose (and YouTube's systems don't catch) will not be blocked.
+- Automatic detection relies on YouTube's labeling. Videos a creator fails to disclose (and YouTube's systems don't catch) will not be auto-blocked — use **Block this channel** for those.
 - Feed cards without a visible badge are not pre-checked — that would require fetching every watch page, which this extension deliberately avoids for performance and privacy.
 - Label selectors are specific to YouTube's current DOM and may break when YouTube updates its frontend. PRs welcome.
 - Label text matching is English-only for now.

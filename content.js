@@ -3,6 +3,7 @@
 
   const BLOCKED_CLASS = "ytai-blocked";
   const LOG_KEY = "ytai-blocked-log";
+  const CHANNEL_KEY = "ytai-channel-blocklist";
   const LOG_MAX = 500;
 
   const CONTAINER_SELECTORS = [
@@ -21,18 +22,53 @@
 
   const WATCH_DATA_RE = /howThisWasMadeSectionViewModel|made with AI/;
 
-  // ---------- log ----------
+  const CHANNEL_PATH_RE = /^(\/@[\w.-]+|\/channel\/[\w-]+|\/c\/[\w.-]+|\/user\/[\w.-]+)(\/|$)/;
+
+  const CHANNEL_LINK_SELECTORS = [
+    'ytd-watch-metadata a[href^="/@"]',
+    'ytd-watch-metadata a[href^="/channel/"]',
+    "#owner a[href^='/@']",
+    'ytd-video-owner-renderer a[href^="/@"]',
+    'ytd-watch-flexy a[href^="/@"]',
+  ].join(",");
+
+  // ---------- storage ----------
+
+  function loadJson(key, fallback) {
+    try {
+      const v = JSON.parse(localStorage.getItem(key));
+      return Array.isArray(v) ? v : fallback;
+    } catch {
+      return fallback;
+    }
+  }
 
   function loadLog() {
-    try {
-      return JSON.parse(localStorage.getItem(LOG_KEY)) || [];
-    } catch {
-      return [];
-    }
+    return loadJson(LOG_KEY, []);
   }
 
   function saveLog(entries) {
     localStorage.setItem(LOG_KEY, JSON.stringify(entries));
+  }
+
+  function loadChannels() {
+    return loadJson(CHANNEL_KEY, []);
+  }
+
+  function saveChannels(entries) {
+    localStorage.setItem(CHANNEL_KEY, JSON.stringify(entries));
+  }
+
+  // ---------- helpers ----------
+
+  function normalizeChannelPath(href) {
+    try {
+      const u = new URL(href, location.origin);
+      const m = u.pathname.match(CHANNEL_PATH_RE);
+      return m ? m[1] : null;
+    } catch {
+      return null;
+    }
   }
 
   function videoIdFromUrl(url) {
@@ -62,10 +98,10 @@
     return { id, url, title };
   }
 
-  function logBlocked(info) {
+  function logBlocked(info, reason) {
     const entries = loadLog();
     if (entries.some((e) => e.id === info.id)) return;
-    entries.unshift({ ...info, time: Date.now() });
+    entries.unshift({ ...info, reason: reason || "label", time: Date.now() });
     saveLog(entries.slice(0, LOG_MAX));
     updatePanel();
   }
@@ -74,15 +110,18 @@
 
   let panel = null;
   let listEl = null;
+  let channelListEl = null;
   let countEl = null;
+  let blockChannelBtn = null;
   let visible = false;
+  let currentChannel = null; // { path, name }
 
   function buildPanel() {
     panel = document.createElement("div");
     panel.id = "ytai-panel";
     const btn = document.createElement("button");
     btn.id = "ytai-toggle";
-    btn.title = "Blocked AI videos";
+    btn.title = "AI Slop Shield";
     countEl = document.createElement("span");
     countEl.id = "ytai-count";
     btn.appendChild(countEl);
@@ -94,7 +133,7 @@
     const header = document.createElement("div");
     header.id = "ytai-header";
     const title = document.createElement("strong");
-    title.textContent = "Blocked AI videos";
+    title.textContent = "AI Slop Shield";
     const actions = document.createElement("div");
     const copyBtn = document.createElement("button");
     copyBtn.textContent = "Copy URLs";
@@ -105,17 +144,37 @@
     actions.append(copyBtn, clearBtn);
     header.append(title, actions);
 
+    const channelHeader = document.createElement("div");
+    channelHeader.id = "ytai-channel-header";
+    const channelTitle = document.createElement("span");
+    channelTitle.textContent = "Blocked channels";
+    blockChannelBtn = document.createElement("button");
+    blockChannelBtn.textContent = "Block this channel";
+    blockChannelBtn.style.display = "none";
+    blockChannelBtn.addEventListener("click", blockCurrentChannel);
+    channelHeader.append(channelTitle, blockChannelBtn);
+
+    channelListEl = document.createElement("div");
+    channelListEl.id = "ytai-channel-list";
+
+    const listTitle = document.createElement("div");
+    listTitle.id = "ytai-list-title";
+    listTitle.textContent = "Blocked videos";
+
     listEl = document.createElement("div");
     listEl.id = "ytai-list";
 
-    box.append(header, listEl);
+    box.append(header, channelHeader, channelListEl, listTitle, listEl);
     panel.append(btn, box);
     document.documentElement.appendChild(panel);
 
     btn.addEventListener("click", () => {
       visible = !visible;
       box.style.display = visible ? "flex" : "none";
-      if (visible) renderList();
+      if (visible) {
+        renderList();
+        renderChannelList();
+      }
     });
   }
 
@@ -130,14 +189,45 @@
       return;
     }
     for (const entry of entries) {
+      const row = document.createElement("div");
+      row.className = "ytai-row";
       const a = document.createElement("a");
       a.href = entry.url;
       a.textContent = entry.title;
       a.target = "_blank";
+      row.appendChild(a);
+      if (entry.reason === "channel") {
+        const tag = document.createElement("span");
+        tag.className = "ytai-tag";
+        tag.textContent = "channel";
+        row.appendChild(tag);
+      }
+      listEl.appendChild(row);
+    }
+  }
+
+  function renderChannelList() {
+    const channels = loadChannels();
+    channelListEl.replaceChildren();
+    if (channels.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "ytai-empty";
+      empty.textContent = "No channels blocked. Use the button above on a watch page.";
+      channelListEl.appendChild(empty);
+      return;
+    }
+    for (const channel of channels) {
       const row = document.createElement("div");
       row.className = "ytai-row";
-      row.appendChild(a);
-      listEl.appendChild(row);
+      const a = document.createElement("a");
+      a.href = channel.path;
+      a.textContent = channel.name || channel.path;
+      a.target = "_blank";
+      const unblock = document.createElement("button");
+      unblock.textContent = "Unblock";
+      unblock.addEventListener("click", () => unblockChannel(channel.path));
+      row.append(a, unblock);
+      channelListEl.appendChild(row);
     }
   }
 
@@ -145,6 +235,16 @@
     if (!countEl) return;
     const n = loadLog().length;
     countEl.textContent = n > 0 ? String(n) : "";
+  }
+
+  function updateBlockChannelButton() {
+    if (!blockChannelBtn) return;
+    if (currentChannel && !isChannelPathBlocked(currentChannel.path)) {
+      blockChannelBtn.style.display = "";
+      blockChannelBtn.title = `Add ${currentChannel.name || currentChannel.path} to the blocklist`;
+    } else {
+      blockChannelBtn.style.display = "none";
+    }
   }
 
   function copyAll() {
@@ -156,6 +256,71 @@
     saveLog([]);
     updatePanel();
     renderList();
+  }
+
+  // ---------- channel blocklist ----------
+
+  function isChannelPathBlocked(path) {
+    return loadChannels().some((c) => c.path === path);
+  }
+
+  function blockCurrentChannel() {
+    if (!currentChannel) return;
+    const channels = loadChannels();
+    if (!channels.some((c) => c.path === currentChannel.path)) {
+      channels.unshift({ ...currentChannel, time: Date.now() });
+      saveChannels(channels);
+    }
+    renderChannelList();
+    const id = currentVideoId();
+    if (id) {
+      logBlocked(
+        { id, url: `https://www.youtube.com/watch?v=${id}`, title: watchTitle() },
+        "channel"
+      );
+      showWatchOverlay(id, {
+        heading: "Channel blocked",
+        message: `Videos from ${currentChannel.name || currentChannel.path} are now hidden from your feeds.`,
+      });
+    }
+    scan();
+  }
+
+  function unblockChannel(path) {
+    saveChannels(loadChannels().filter((c) => c.path !== path));
+    document.querySelectorAll("." + BLOCKED_CLASS).forEach((el) => {
+      el.classList.remove(BLOCKED_CLASS);
+    });
+    renderChannelList();
+    scan();
+  }
+
+  function isChannelBlockedContainer(container) {
+    const channels = loadChannels();
+    if (channels.length === 0) return false;
+    for (const a of container.querySelectorAll("a[href]")) {
+      const path = normalizeChannelPath(a.getAttribute("href"));
+      if (path && channels.some((c) => c.path === path)) return true;
+    }
+    return false;
+  }
+
+  function detectCurrentChannel() {
+    for (const selector of CHANNEL_LINK_SELECTORS.split(",")) {
+      const anchor = document.querySelector(selector.trim());
+      if (anchor) {
+        const path = normalizeChannelPath(anchor.getAttribute("href"));
+        if (path) {
+          const name =
+            anchor.textContent.trim() ||
+            anchor.getAttribute("title") ||
+            document.querySelector("#channel-name yt-formatted-string, ytd-channel-name yt-formatted-string")?.textContent.trim() ||
+            path;
+          return { path, name };
+        }
+      }
+    }
+    return null;
   }
 
   // ---------- watch page blocking ----------
@@ -170,13 +335,22 @@
     return t || "(untitled)";
   }
 
-  function blockWatchPage(id) {
+  function blockWatchPage(id, reason) {
     if (document.getElementById("ytai-overlay")) return;
-    logBlocked({ id, url: `https://www.youtube.com/watch?v=${id}`, title: watchTitle() });
-    showWatchOverlay(id);
+    logBlocked(
+      { id, url: `https://www.youtube.com/watch?v=${id}`, title: watchTitle() },
+      reason
+    );
+    showWatchOverlay(id, {
+      heading: reason === "channel" ? "Channel blocked" : "AI-labeled video blocked",
+      message:
+        reason === "channel"
+          ? "This channel is on your blocklist."
+          : "YouTube labels this content as altered or synthetic.",
+    });
   }
 
-  function showWatchOverlay(id) {
+  function showWatchOverlay(id, opts) {
     pauseMedia();
 
     const overlay = document.createElement("div");
@@ -185,9 +359,9 @@
     const card = document.createElement("div");
     card.id = "ytai-overlay-card";
     const heading = document.createElement("strong");
-    heading.textContent = "AI-labeled video blocked";
+    heading.textContent = opts.heading;
     const msg = document.createElement("div");
-    msg.textContent = "YouTube labels this content as altered or synthetic. Logged to your blocked list.";
+    msg.textContent = opts.message;
     const buttons = document.createElement("div");
 
     const watchBtn = document.createElement("button");
@@ -232,23 +406,38 @@
   }
 
   async function checkWatchPage() {
-    if (!location.pathname.startsWith("/watch")) return;
+    if (!location.pathname.startsWith("/watch")) {
+      currentChannel = null;
+      updateBlockChannelButton();
+      return;
+    }
     const id = currentVideoId();
-    if (!id || bypassed.has(id) || watchInFlight) return;
+    if (!id) return;
+
+    currentChannel = detectCurrentChannel();
+    updateBlockChannelButton();
+
+    if (bypassed.has(id)) return;
+
+    if (currentChannel && isChannelPathBlocked(currentChannel.path)) {
+      blockWatchPage(id, "channel");
+      return;
+    }
 
     // Fast path: disclosure panel rendered in the DOM
     if (document.querySelector("how-this-was-made-section-view-model")) {
-      blockWatchPage(id);
+      blockWatchPage(id, "label");
       return;
     }
     // "AI" badge next to the video title
     for (const badge of document.querySelectorAll(BADGE_SELECTORS)) {
       if (badge.textContent.trim().toUpperCase() === "AI") {
-        blockWatchPage(id);
+        blockWatchPage(id, "label");
         return;
       }
     }
 
+    if (watchInFlight) return;
     // Fallback: the disclosure usually lives only in the page's embedded
     // JSON, so fetch the watch page and search the HTML.
     watchInFlight = true;
@@ -256,7 +445,7 @@
       const res = await fetch(location.href, { credentials: "include" });
       const html = await res.text();
       if (WATCH_DATA_RE.test(html) && !bypassed.has(id)) {
-        blockWatchPage(id);
+        blockWatchPage(id, "label");
       }
     } catch {
       // network failure: do nothing
@@ -279,14 +468,22 @@
 #ytai-toggle{width:36px;height:36px;border-radius:50%;border:1px solid #606060;background:#0f0f0f;color:#fff;cursor:pointer;position:relative;font-size:16px;}
 #ytai-toggle::after{content:"AI";}
 #ytai-count{position:absolute;top:-6px;right:-6px;background:#c00;color:#fff;border-radius:9px;font-size:10px;min-width:16px;height:16px;line-height:16px;text-align:center;}
-#ytai-box{position:absolute;bottom:44px;right:0;width:340px;max-height:420px;display:none;flex-direction:column;background:#0f0f0f;border:1px solid #606060;border-radius:8px;color:#f1f1f1;box-shadow:0 4px 16px rgba(0,0,0,.5);}
-#ytai-header{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid #303030;}
+#ytai-box{position:absolute;bottom:44px;right:0;width:340px;max-height:480px;display:none;flex-direction:column;background:#0f0f0f;border:1px solid #606060;border-radius:8px;color:#f1f1f1;box-shadow:0 4px 16px rgba(0,0,0,.5);overflow:hidden;}
+#ytai-header{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid #303030;flex-shrink:0;}
 #ytai-header button{background:#272727;color:#f1f1f1;border:none;border-radius:4px;padding:3px 8px;margin-left:6px;cursor:pointer;font-size:11px;}
 #ytai-header button:hover{background:#3f3f3f;}
-#ytai-list{overflow-y:auto;padding:6px 10px;}
-.ytai-row{padding:5px 0;border-bottom:1px solid #1f1f1f;font-size:12px;}
+#ytai-channel-header{display:flex;justify-content:space-between;align-items:center;padding:8px 10px 2px;font-size:11px;color:#aaa;flex-shrink:0;}
+#ytai-channel-header button{background:#3f3f3f;color:#f1f1f1;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:11px;}
+#ytai-channel-header button:hover{background:#555;}
+#ytai-channel-list{max-height:130px;overflow-y:auto;padding:2px 10px;flex-shrink:0;}
+#ytai-list-title{padding:8px 10px 2px;font-size:11px;color:#aaa;flex-shrink:0;}
+#ytai-list{overflow-y:auto;padding:2px 10px 6px;flex:1;}
+.ytai-row{padding:5px 0;border-bottom:1px solid #1f1f1f;font-size:12px;display:flex;justify-content:space-between;align-items:center;gap:6px;}
 .ytai-row a{color:#3ea6ff;text-decoration:none;word-break:break-word;}
-.ytai-empty{padding:10px;color:#aaa;font-size:12px;}
+.ytai-row button{background:#272727;color:#f1f1f1;border:none;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:10px;flex-shrink:0;}
+.ytai-row button:hover{background:#3f3f3f;}
+.ytai-tag{background:#3a2a00;color:#ffd666;border-radius:3px;font-size:10px;padding:1px 5px;margin-left:6px;flex-shrink:0;}
+.ytai-empty{padding:8px 0;color:#aaa;font-size:12px;}
 #ytai-overlay{position:fixed;inset:0;z-index:999998;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;font-family:sans-serif;}
 #ytai-overlay-card{background:#0f0f0f;border:1px solid #606060;border-radius:8px;padding:24px;max-width:420px;color:#f1f1f1;text-align:center;}
 #ytai-overlay-card strong{font-size:18px;display:block;margin-bottom:8px;}
@@ -311,12 +508,19 @@
   }
 
   function scan(root) {
+    const channels = loadChannels();
     for (const container of (root || document).querySelectorAll(CONTAINER_SELECTORS)) {
       if (container.classList.contains(BLOCKED_CLASS)) continue;
+      let reason = null;
       if (isAiLabeled(container)) {
+        reason = "label";
+      } else if (channels.length > 0 && isChannelBlockedContainer(container)) {
+        reason = "channel";
+      }
+      if (reason) {
         container.classList.add(BLOCKED_CLASS);
         const info = extractInfo(container);
-        if (info) logBlocked(info);
+        if (info) logBlocked(info, reason);
       }
     }
   }
